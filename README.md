@@ -1,136 +1,93 @@
-# XDN Evaluation Script
-
-## 1. run.py -- Run Experiment
-
-**Output files** (in `results_<experiment_id>/`):
-- `k6_raw_<model>.csv` -- raw k6 metrics
-- `k6_raw_<model>_simplified.csv` -- simplified request-level CSV
-- `crashes_<model>_timing.csv` -- crash event log
-- `reconfig_<model>_timing.csv` -- reconfiguration event log
-
-### Replica failure experiment (Remote)
+**RAFT**
 
 ```bash
-python3 run.py \
-    --config ../conf/gigapaxos.xdn.3way.cloudlab.properties \
-    --experiment-id exp_linearizable_1000rps_v2 \
-    --consistency linearizable \
-    --service todo_linearizable \
-    --target-host 10.10.1.2 \
-    --target-port 2300 \
-    --target-rate 1000 \
-    --prealloc-vus 1000 \
-    --max-vus 5000 \
-    --warmup-tasks 50 \
-    --duration 180 \
-    --req-timeout 5s \
-    --crash-schedule '{"100": "AR0", "125": "AR2"}'
+./deploy_raft.sh build
 ```
 
-### Leader change experiment (Remote)
-
 ```bash
-python3 run.py \
-  --config ../conf/gigapaxos.xdn.3way.cloudlab.properties \
-  --experiment-id exp_leader_change_exp_v2 \
-  --consistency linearizable \
-  --service todo_linearizable \
-  --target-host 10.10.1.1 \
-  --target-port 2300 \
-  --target-rate 1000 \
-  --prealloc-vus 1000 \
-  --max-vus 7500 \
-  --warmup-tasks 50 \
-  --duration 180 \
-  --req-timeout 10s \
-  --crash-schedule '{"125": "AR1"}'
+./deploy_raft.sh start
 ```
 
-### Reconfiguration experiment (Remote)
-
-`--csv-time-format unix_milli` is used to enable millisecond-precision timestamps (required for downtime analysis in `parser.py --detailed`).
-
 ```bash
-python3 run.py \
-    --config ../conf/gigapaxos.xdn.3way.cloudlab.properties \
-    --experiment-id reconf_10_request_mixed_batchFalse_r6615_4 \
-    --consistency linearizable \
-    --service todo_linearizable \
-    --target-host 10.10.1.2 \
-    --target-port 2300 \
-    --target-rate 10 \
-    --prealloc-vus 15 \
-    --max-vus 100 \
-    --warmup-tasks 50 \
-    --duration 120 \
-    --req-timeout 5s \
-    --reconfig-schedule '{"60": {"NODES": ["AR0", "AR1", "AR2"]}}' \
-    --csv-time-format unix_milli
+./deploy_raft.sh status 
 ```
 
-## 2. parser.py -- Parse Results
-
-Reads `k6_raw_<model>_simplified.csv` and produces throughput and downtime CSVs.
-
-### Throughput only (all experiment types)
-
 ```bash
-python3 parser.py results_exp_linearizable_1000rps_v2 --model linearizable
+./deploy_raft.sh sanity
 ```
 
-Output: `parsed_data_linearizable.csv`
-
-### With downtime analysis (reconfiguration experiments)
-
 ```bash
-python3 parser.py results_reconf_10_request_mixed_batchFalse_r6615_2 \
-    --model linearizable \
-    --detailed \
-    --bin-ms 200 \
-    --padding-bins 1
+TARGET_HOST=10.10.1.1 TARGET_PORT=8001 TOTAL_REQUESTS=10000 WARMUP_BOOKS=50 k6 run --out csv=raw_raft_remote.csv benchmark_bookcatalog.js
 ```
 
-Output: `parsed_data_linearizable.csv`, `downtime_summary.csv`, `parsed_data_linearizable_detailed.csv`
-
-## 3. visualize_results.py -- Generate Plots
-
-### Replica failure comparison (multi-folder)
-
 ```bash
-python3 visualize_results.py \
-    --mode default \
-    --multi \
-        linearizable:replica_failures/exp_linearizable_1000rps_v2 \
-        sequential:replica_failures/exp_sequential_1000rps_v2 \
-        eventual:replica_failures/exp_eventual_1000rps_v2 \
-    --throughput-prefix parsed_data \
-    --title "Throughput under replica failures" \
-    --output replica_failures.png
+./deploy_raft.sh clean
 ```
 
-### Leader change (single folder)
-
-```bash
-python3 visualize_results.py \
-    --mode leader \
-    --experiment exp_leader_change_exp_v2 \
-    --models linearizable \
-    --throughput-prefix parsed_data \
-    --title "Leader Change" \
-    --output leader_change.png
+```
+rsync -azP panjisri@clnode327.clemson.cloudlab.us:~/xdn/fsync_evaluation/ ./fsync_evaluation/
 ```
 
-### Reconfiguration (two panels)
+```bash
+python3 parser.py --input raw_raft_remote.csv --output latency_raft_remote.csv
+```
 
-Requires `downtime_summary.csv` and a binned throughput CSV from `parser.py --detailed`.
+```
+python3 plot.py 1 latency_raft_remote.csv latency_raft_remote.png
+```
+
+**XDN**
 
 ```bash
-python3 visualize_results.py \
-    --mode reconfiguration \
-    --zoom \
-    --experiment results_reconf_10_request_mixed_batchFalse_r6615_2 \
-    --models linearizable \
-    --throughput-prefix parsed_data \
-    --title "Reconfiguration throughput" \
-    --output Reconfiguration throughput.png
+./bin/gpServer.sh -DgigapaxosConfig=conf/gigapaxos.xdn.3way.cloudlab.properties start all
+```
+
+```bash
+export XDN_CONTROL_PLANE=10.10.1.4
+```
+
+```bash
+xdn launch bookcatalog --image=fadhilkurnia/xdn-bookcatalog --state=/app/data/ --deterministic=true
+```
+
+```bash
+for host in 10.10.1.1 10.10.1.2 10.10.1.3; do
+  echo "Host $host:"
+  curl -s "http://$host:2300/api/v2/services/bookcatalog/replica/info" \
+    -H "XDN: bookcatalog" |
+    grep -o '"role":"[^"]*"'
+done
+```
+
+```bash
+TARGET_HOST=10.10.1.1 TARGET_PORT=2300 TOTAL_REQUESTS=10000 WARMUP_BOOKS=50 k6 run --out csv=raw_xdn_remote.csv benchmark_bookcatalog.js
+```
+
+```
+rsync -azP panjisri@clnode327.clemson.cloudlab.us:~/xdn/fsync_evaluation/ ./fsync_evaluation/
+```
+
+```bash
+python3 parser.py --input raw_xdn_remote.csv --output latency_xdn_remote.csv
+```
+
+```
+python3 plot.py 1 latency_xdn_remote.csv latency_xdn_remote.png
+```
+
+```bash
+SSH_KEY_PATH=~/.ssh/id_cloudlab \
+GP_USERNAME=panjisri \
+  ./bin/gpServer.sh \
+    -DgigapaxosConfig=conf/gigapaxos.xdn.3way.cloudlab.properties \
+    forceclear all
+    
+for h in 10.10.1.1 10.10.1.2 10.10.1.3 10.10.1.4; do
+    ssh -i ~/.ssh/id_cloudlab panjisri@$h "sudo rm -rf /tmp/gigapaxos /tmp/xdn"
+  done
+```
+
+**BOTH**
+```python
+python3 plot.py 2 latency_raft_remote.csv latency_xdn_remote.csv CDF_Graph_remote.png
 ```
