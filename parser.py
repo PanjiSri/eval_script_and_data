@@ -110,19 +110,23 @@ def load_request_rows(csv_path: Path) -> List[RequestRow]:
     if not rows:
         sys.exit(f"Error: No non-setup request rows found in {csv_path}")
 
+    # Normalize timestamps to milliseconds.
+    # Unix seconds are 10 digits (< 1e12), milliseconds are 13 digits (> 1e12).
+    if rows[0].timestamp_ms < 1e12:
+        rows = [RequestRow(timestamp_ms=r.timestamp_ms * 1000, status=r.status) for r in rows]
+
     rows.sort(key=lambda row: row.timestamp_ms)
     return rows
 
 
 def write_throughput_csv(output_path: Path, rows: List[RequestRow]) -> None:
     base_ts = rows[0].timestamp_ms
-    time_scale = 1000.0 if base_ts > 1e12 else 1.0
 
     max_second = 0
     throughput = Counter()
 
     for row in rows:
-        second = int((row.timestamp_ms - base_ts) / time_scale)
+        second = int((row.timestamp_ms - base_ts) / 1000.0)
         max_second = max(max_second, second)
         if 200 <= row.status < 300:
             throughput[second] += 1

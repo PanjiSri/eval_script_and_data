@@ -49,6 +49,7 @@ class Config:
     target_host_after_reconfig: str
     target_port_after_reconfig: int
     csv_time_format: str
+    k6_script: str
 
 # Example :
 '''
@@ -164,6 +165,11 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Set K6_CSV_TIME_FORMAT (e.g., 'unix_milli'). Required for reconfiguration downtime analysis."
     )
+    parser.add_argument(
+        "--script",
+        default=None,
+        help="Path to k6 benchmark script. Defaults to benchmark.js in the same directory as run.py."
+    )
 
     return parser.parse_args()
 
@@ -253,7 +259,8 @@ def build_config(args: argparse.Namespace) -> Config:
         rc_http_url=rc_http_url,
         target_host_after_reconfig=args.target_host_after_reconfig,
         target_port_after_reconfig=args.target_port_after_reconfig,
-        csv_time_format=args.csv_time_format
+        csv_time_format=args.csv_time_format,
+        k6_script=args.script
     )
 
 
@@ -440,7 +447,7 @@ def run_benchmark(config: Config):
         k6_env["XDN_TARGET_PORT_AFTER"] = str(config.target_port_after_reconfig)
 
     script_dir = Path(__file__).parent
-    k6_script = script_dir / "benchmark.js"
+    k6_script = Path(config.k6_script) if config.k6_script else script_dir / "benchmark.js"
 
     try:
         k6_process = subprocess.Popen(
